@@ -1,0 +1,32 @@
+import java.io.FileReader;
+import java.io.IOException;
+import org.json.JSONObject;
+import org.json.JSONTokener;
+
+public class LocalJsonReader {
+    public static void main(String[] args) {
+        // Replace with your JSON file path
+        String filePath = "path/to/your/file.json";
+
+        try {
+            // Create a FileReader object
+            FileReader reader = new FileReader(filePath);
+            
+            // Create a JSONTokener object
+            JSONTokener tokener = new JSONTokener(reader);
+            
+            // Create a JSONObject from the file content
+            JSONObject jsonObject = new JSONObject(tokener);
+            
+            // Print the JSON content with pretty formatting
+            System.out.println(jsonObject.toString(2));
+            
+            // Close the reader
+            reader.close();
+            
+        } catch (IOException e) {
+            System.out.println("Error reading file: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+}
