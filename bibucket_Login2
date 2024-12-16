@@ -1,0 +1,98 @@
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.util.Base64;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import org.json.JSONObject;
+
+public class BitbucketHtmlJsonReader {
+    public static void main(String[] args) {
+        // Replace these values with your actual credentials and file path
+        String username = "your-username";
+        String token = "your-token";
+        String fileUrl = "your-bitbucket-file-url"; // The complete URL you see in your browser
+
+        try {
+            // Create URL object
+            URL url = new URL(fileUrl);
+            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+
+            // Set up basic authentication
+            String auth = username + ":" + token;
+            String encodedAuth = Base64.getEncoder().encodeToString(auth.getBytes());
+            conn.setRequestProperty("Authorization", "Basic " + encodedAuth);
+
+            // Set request method
+            conn.setRequestMethod("GET");
+
+            // Add headers to mimic browser request
+            conn.setRequestProperty("User-Agent", "Mozilla/5.0");
+            conn.setRequestProperty("Accept", "text/html,application/json");
+
+            // Get response code
+            int responseCode = conn.getResponseCode();
+            System.out.println("Response Code: " + responseCode);
+
+            if (responseCode == HttpURLConnection.HTTP_OK) {
+                // Read the response
+                BufferedReader in = new BufferedReader(
+                    new InputStreamReader(conn.getInputStream())
+                );
+                String inputLine;
+                StringBuilder response = new StringBuilder();
+
+                while ((inputLine = in.readLine()) != null) {
+                    response.append(inputLine);
+                }
+                in.close();
+
+                // Extract JSON content from HTML
+                String htmlContent = response.toString();
+                
+                // Pattern to match JSON content - adjust based on actual HTML structure
+                Pattern pattern = Pattern.compile("\"source\":\\s*(\\{[^}]+\\})");
+                Matcher matcher = pattern.matcher(htmlContent);
+
+                if (matcher.find()) {
+                    String jsonContent = matcher.group(1);
+                    // Parse JSON content
+                    JSONObject jsonObject = new JSONObject(jsonContent);
+                    System.out.println("Extracted JSON Content:");
+                    System.out.println(jsonObject.toString(2)); // Pretty print
+                } else {
+                    // Try alternative pattern for file content
+                    pattern = Pattern.compile("<pre[^>]*>(.*?)</pre>", Pattern.DOTALL);
+                    matcher = pattern.matcher(htmlContent);
+                    
+                    if (matcher.find()) {
+                        String preContent = matcher.group(1);
+                        // Try to parse as JSON
+                        try {
+                            JSONObject jsonObject = new JSONObject(preContent);
+                            System.out.println("Extracted JSON Content from pre tag:");
+                            System.out.println(jsonObject.toString(2));
+                        } catch (Exception e) {
+                            System.out.println("Raw content found in pre tag:");
+                            System.out.println(preContent);
+                        }
+                    } else {
+                        System.out.println("Could not find JSON content in the HTML response");
+                        // Optionally save the HTML for debugging
+                        System.out.println("Full HTML response:");
+                        System.out.println(htmlContent);
+                    }
+                }
+            } else {
+                System.out.println("Failed to fetch page. Response code: " + responseCode);
+            }
+
+            conn.disconnect();
+
+        } catch (Exception e) {
+            System.out.println("Error occurred: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+}
