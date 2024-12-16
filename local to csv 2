@@ -1,0 +1,145 @@
+import org.json.JSONObject;
+import org.json.JSONTokener;
+import java.io.*;
+import java.util.*;
+
+public class PTEParametersCSVGenerator {
+    // Helper method to normalize parameter names
+    private static String normalizeParamName(String paramName) {
+        return paramName.replace("_", "").toUpperCase();
+    }
+    
+    // Helper method to get original parameter name that matches normalized version
+    private static String findMatchingParam(String normalizedName, Set<String> allParams) {
+        for (String param : allParams) {
+            if (normalizeParamName(param).equals(normalizedName)) {
+                return param;
+            }
+        }
+        return normalizedName;
+    }
+
+    public static void main(String[] args) {
+        String inputPath = "path/to/your/config.json";
+        String outputPath = "pte_parameters.csv";
+        
+        try {
+            // Read and parse the JSON file
+            FileReader reader = new FileReader(inputPath);
+            JSONObject rootObject = new JSONObject(new JSONTokener(reader));
+            
+            // Store all parameters and their values
+            Map<String, Map<String, String>> serviceParameters = new HashMap<>();
+            Map<String, Set<String>> normalizedToOriginalParams = new HashMap<>();
+            Set<String> normalizedParamNames = new TreeSet<>();
+            
+            // First pass: collect all parameter names and their variations
+            Iterator<String> serviceKeys = rootObject.keys();
+            while (serviceKeys.hasNext()) {
+                String serviceName = serviceKeys.next();
+                JSONObject service = rootObject.getJSONObject(serviceName);
+                
+                Iterator<String> envKeys = service.keys();
+                while (envKeys.hasNext()) {
+                    String envName = envKeys.next();
+                    if (envName.equals("PTE")) {
+                        JSONObject envObject = service.getJSONObject(envName);
+                        String ecsKey = envObject.keys().next();
+                        JSONObject ecsObject = envObject.getJSONObject(ecsKey);
+                        
+                        if (ecsObject.has("parameters")) {
+                            JSONObject parameters = ecsObject.getJSONObject("parameters");
+                            Iterator<String> paramKeys = parameters.keys();
+                            
+                            while (paramKeys.hasNext()) {
+                                String originalParamName = paramKeys.next();
+                                String normalizedName = normalizeParamName(originalParamName);
+                                normalizedParamNames.add(normalizedName);
+                                
+                                normalizedToOriginalParams.computeIfAbsent(normalizedName, k -> new HashSet<>())
+                                    .add(originalParamName);
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // Second pass: collect values using normalized names
+            serviceKeys = rootObject.keys();
+            while (serviceKeys.hasNext()) {
+                String serviceName = serviceKeys.next();
+                JSONObject service = rootObject.getJSONObject(serviceName);
+                
+                Iterator<String> envKeys = service.keys();
+                while (envKeys.hasNext()) {
+                    String envName = envKeys.next();
+                    if (envName.equals("PTE")) {
+                        JSONObject envObject = service.getJSONObject(envName);
+                        String ecsKey = envObject.keys().next();
+                        JSONObject ecsObject = envObject.getJSONObject(ecsKey);
+                        
+                        if (ecsObject.has("parameters")) {
+                            JSONObject parameters = ecsObject.getJSONObject("parameters");
+                            Map<String, String> paramMap = new HashMap<>();
+                            
+                            for (String normalizedName : normalizedParamNames) {
+                                String value = null;
+                                // Check all possible original names for this normalized name
+                                for (String originalName : normalizedToOriginalParams.get(normalizedName)) {
+                                    if (parameters.has(originalName)) {
+                                        value = parameters.getString(originalName);
+                                        break;
+                                    }
+                                }
+                                if (value != null) {
+                                    paramMap.put(normalizedName, value);
+                                }
+                            }
+                            
+                            serviceParameters.put(serviceName, paramMap);
+                        }
+                    }
+                }
+            }
+            
+            // Write to CSV
+            FileWriter csvWriter = new FileWriter(outputPath);
+            
+            // Write header
+            csvWriter.append("Service");
+            for (String paramName : normalizedParamNames) {
+                csvWriter.append(",").append(paramName);
+            }
+            csvWriter.append("\n");
+            
+            // Write data
+            for (Map.Entry<String, Map<String, String>> entry : serviceParameters.entrySet()) {
+                csvWriter.append(entry.getKey());
+                
+                for (String paramName : normalizedParamNames) {
+                    csvWriter.append(",");
+                    String value = entry.getValue().getOrDefault(paramName, "");
+                    // Escape special characters if needed
+                    if (value.contains(",") || value.contains("\"") || value.contains("\n")) {
+                        value = "\"" + value.replace("\"", "\"\"") + "\"";
+                    }
+                    csvWriter.append(value);
+                }
+                csvWriter.append("\n");
+            }
+            
+            // Close resources
+            csvWriter.flush();
+            csvWriter.close();
+            reader.close();
+            
+            System.out.println("CSV file has been created successfully at: " + outputPath);
+            System.out.println("Total services processed: " + serviceParameters.size());
+            System.out.println("Total normalized parameters found: " + normalizedParamNames.size());
+            
+        } catch (Exception e) {
+            System.out.println("Error processing JSON or writing CSV: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+}
