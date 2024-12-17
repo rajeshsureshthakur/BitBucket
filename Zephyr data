@@ -1,0 +1,216 @@
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.util.Base64;
+import java.io.FileWriter;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import org.json.JSONArray;
+import org.json.JSONObject;
+
+public class ZephyrMetricsFetcher {
+    private final String BASE_URL = "https://api.zephyrscale.smartbear.com/v2";
+    private final String PROJECT_KEY;
+    private final String ACCESS_TOKEN;
+    private final HttpClient client;
+
+    public ZephyrMetricsFetcher(String projectKey, String accessToken) {
+        this.PROJECT_KEY = projectKey;
+        this.ACCESS_TOKEN = accessToken;
+        this.client = HttpClient.newHttpClient();
+    }
+
+    public void fetchAndDisplayMetrics(String releaseVersion) {
+        try {
+            JSONObject requirements = fetchRequirements(releaseVersion);
+            JSONObject testCases = fetchTestCases(releaseVersion);
+            JSONObject executions = fetchTestExecutions(releaseVersion);
+            
+            MetricsReport report = calculateMetrics(requirements, testCases, executions, releaseVersion);
+            displayMetrics(report);
+            exportToCsv(report);
+        } catch (Exception e) {
+            System.err.println("Error fetching metrics: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+
+    private JSONObject fetchRequirements(String releaseVersion) throws Exception {
+        String endpoint = String.format("/requirements?projectKey=%s&maxResults=1000&version=%s", 
+            PROJECT_KEY, releaseVersion);
+        return makeApiRequest(endpoint);
+    }
+
+    private JSONObject fetchTestCases(String releaseVersion) throws Exception {
+        String endpoint = String.format("/testcases?projectKey=%s&maxResults=1000&version=%s", 
+            PROJECT_KEY, releaseVersion);
+        return makeApiRequest(endpoint);
+    }
+
+    private JSONObject fetchTestExecutions(String releaseVersion) throws Exception {
+        String endpoint = String.format("/testexecutions?projectKey=%s&maxResults=1000&version=%s", 
+            PROJECT_KEY, releaseVersion);
+        return makeApiRequest(endpoint);
+    }
+
+    private JSONObject makeApiRequest(String endpoint) throws Exception {
+        HttpRequest request = HttpRequest.newBuilder()
+            .uri(URI.create(BASE_URL + endpoint))
+            .header("Authorization", "Bearer " + ACCESS_TOKEN)
+            .header("Accept", "application/json")
+            .GET()
+            .build();
+
+        HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+        
+        if (response.statusCode() != 200) {
+            throw new RuntimeException("API request failed with status: " + response.statusCode());
+        }
+        
+        return new JSONObject(response.body());
+    }
+
+    private static class MetricsReport {
+        String releaseVersion;
+        String projectKey;
+        int totalRequirements;
+        int mappedRequirements;
+        double coveragePercentage;
+        int totalTestCases;
+        int totalExecutions;
+        int passed;
+        int failed;
+        int blocked;
+        int unexecuted;
+        LocalDateTime generatedAt;
+    }
+
+    private MetricsReport calculateMetrics(JSONObject requirements, JSONObject testCases, 
+                                         JSONObject executions, String releaseVersion) {
+        MetricsReport report = new MetricsReport();
+        report.releaseVersion = releaseVersion;
+        report.projectKey = PROJECT_KEY;
+        report.generatedAt = LocalDateTime.now();
+
+        // Calculate basic metrics
+        report.totalRequirements = requirements.getJSONArray("values").length();
+        report.totalTestCases = testCases.getJSONArray("values").length();
+        
+        JSONArray executionValues = executions.getJSONArray("values");
+        report.totalExecutions = executionValues.length();
+        
+        // Calculate execution status counts
+        for (int i = 0; i < executionValues.length(); i++) {
+            JSONObject execution = executionValues.getJSONObject(i);
+            String status = execution.getString("status");
+            switch (status.toLowerCase()) {
+                case "pass": report.passed++; break;
+                case "fail": report.failed++; break;
+                case "blocked": report.blocked++; break;
+                case "unexecuted": report.unexecuted++; break;
+            }
+        }
+
+        // Calculate mapped requirements
+        JSONArray testCaseValues = testCases.getJSONArray("values");
+        for (int i = 0; i < testCaseValues.length(); i++) {
+            JSONObject testCase = testCaseValues.getJSONObject(i);
+            if (testCase.has("requirements") && 
+                !testCase.getJSONArray("requirements").isEmpty()) {
+                report.mappedRequirements++;
+            }
+        }
+
+        // Calculate coverage percentage
+        report.coveragePercentage = (report.mappedRequirements * 100.0 / report.totalRequirements);
+        
+        return report;
+    }
+
+    private void displayMetrics(MetricsReport report) {
+        System.out.println("\nZephyr Metrics Report for Release: " + report.releaseVersion);
+        System.out.println("==========================================");
+        System.out.println("Requirements Metrics:");
+        System.out.println("- Total Requirements: " + report.totalRequirements);
+        System.out.println("- Mapped Requirements: " + report.mappedRequirements);
+        System.out.println("- Coverage Percentage: " + 
+            String.format("%.2f%%", report.coveragePercentage));
+        
+        System.out.println("\nTest Case Metrics:");
+        System.out.println("- Total Test Cases: " + report.totalTestCases);
+        System.out.println("- Total Executions: " + report.totalExecutions);
+        
+        System.out.println("\nExecution Status:");
+        System.out.println("- Passed: " + report.passed + 
+            String.format(" (%.2f%%)", (report.passed * 100.0 / report.totalExecutions)));
+        System.out.println("- Failed: " + report.failed + 
+            String.format(" (%.2f%%)", (report.failed * 100.0 / report.totalExecutions)));
+        System.out.println("- Blocked: " + report.blocked + 
+            String.format(" (%.2f%%)", (report.blocked * 100.0 / report.totalExecutions)));
+        System.out.println("- Unexecuted: " + report.unexecuted + 
+            String.format(" (%.2f%%)", (report.unexecuted * 100.0 / report.totalExecutions)));
+    }
+
+    private void exportToCsv(MetricsReport report) {
+        String timestamp = DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss")
+            .format(report.generatedAt);
+        String fileName = String.format("zephyr_metrics_%s_%s.csv", 
+            report.projectKey, timestamp);
+
+        try (FileWriter writer = new FileWriter(fileName)) {
+            // Write headers
+            writer.write("Metric,Value\n");
+            
+            // Write basic information
+            writer.write(String.format("Report Generated,\"%s\"\n", 
+                report.generatedAt.format(DateTimeFormatter.ISO_LOCAL_DATE_TIME)));
+            writer.write(String.format("Project Key,\"%s\"\n", report.projectKey));
+            writer.write(String.format("Release Version,\"%s\"\n", report.releaseVersion));
+            
+            // Write requirements metrics
+            writer.write(String.format("Total Requirements,%d\n", report.totalRequirements));
+            writer.write(String.format("Mapped Requirements,%d\n", report.mappedRequirements));
+            writer.write(String.format("Requirements Coverage,%.2f%%\n", report.coveragePercentage));
+            
+            // Write test case metrics
+            writer.write(String.format("Total Test Cases,%d\n", report.totalTestCases));
+            writer.write(String.format("Total Executions,%d\n", report.totalExecutions));
+            
+            // Write execution status
+            writer.write(String.format("Passed Tests,%d\n", report.passed));
+            writer.write(String.format("Failed Tests,%d\n", report.failed));
+            writer.write(String.format("Blocked Tests,%d\n", report.blocked));
+            writer.write(String.format("Unexecuted Tests,%d\n", report.unexecuted));
+            
+            // Write percentages
+            writer.write(String.format("Pass Percentage,%.2f%%\n", 
+                (report.passed * 100.0 / report.totalExecutions)));
+            writer.write(String.format("Fail Percentage,%.2f%%\n", 
+                (report.failed * 100.0 / report.totalExecutions)));
+            writer.write(String.format("Block Percentage,%.2f%%\n", 
+                (report.blocked * 100.0 / report.totalExecutions)));
+            writer.write(String.format("Unexecuted Percentage,%.2f%%\n", 
+                (report.unexecuted * 100.0 / report.totalExecutions)));
+
+            System.out.println("\nMetrics exported to: " + fileName);
+        } catch (Exception e) {
+            System.err.println("Error writing CSV file: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+
+    public static void main(String[] args) {
+        if (args.length != 3) {
+            System.out.println("Usage: java ZephyrMetricsFetcher <projectKey> <accessToken> <releaseVersion>");
+            System.exit(1);
+        }
+
+        String projectKey = args[0];
+        String accessToken = args[1];
+        String releaseVersion = args[2];
+
+        ZephyrMetricsFetcher fetcher = new ZephyrMetricsFetcher(projectKey, accessToken);
+        fetcher.fetchAndDisplayMetrics(releaseVersion);
+    }
+}
