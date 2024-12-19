@@ -1,0 +1,145 @@
+import org.json.JSONObject;
+import org.json.JSONTokener;
+import java.io.*;
+import java.util.*;
+
+public class PTEParametersCSVGenerator {
+    // Map to store parameter name normalizations
+    private static final Map<String, String> PARAM_NORMALIZATIONS = new HashMap<String, String>() {{
+        put("CPULIMIT", "CPUMAX");
+        put("CPU_LIMIT", "CPUMAX");
+        put("CPU_MAX", "CPUMAX");
+        put("MEMORYLIMIT", "MEMORYMAX");
+        put("MEMORY_LIMIT", "MEMORYMAX");
+        put("MEMORY_MAX", "MEMORYMAX");
+        put("CPUMINIMUM", "CPUMIN");
+        put("CPU_MINIMUM", "CPUMIN");
+        put("CPU_MIN", "CPUMIN");
+        put("MEMORYMINIMUM", "MEMORYMIN");
+        put("MEMORY_MINIMUM", "MEMORYMIN");
+        put("MEMORY_MIN", "MEMORYMIN");
+    }};
+
+    private static String normalizeParamName(String paramName) {
+        // Remove underscores and convert to uppercase
+        String normalized = paramName.replace("_", "").toUpperCase();
+        // Check if this parameter has a special normalization
+        return PARAM_NORMALIZATIONS.getOrDefault(normalized, normalized);
+    }
+
+    public static void main(String[] args) {
+        String inputPath = "path/to/your/config.json";
+        String outputPath = "pte_parameters.csv";
+        
+        try {
+            // Read and parse the JSON file
+            FileReader reader = new FileReader(inputPath);
+            JSONObject rootObject = new JSONObject(new JSONTokener(reader));
+            
+            // Store service, namespace, and parameters
+            List<ServiceEntry> serviceEntries = new ArrayList<>();
+            Set<String> normalizedParamNames = new TreeSet<>();
+            
+            // Process all services
+            Iterator<String> serviceKeys = rootObject.keys();
+            while (serviceKeys.hasNext()) {
+                String serviceName = serviceKeys.next();
+                JSONObject service = rootObject.getJSONObject(serviceName);
+                
+                Iterator<String> envKeys = service.keys();
+                while (envKeys.hasNext()) {
+                    String envName = envKeys.next();
+                    if (envName.equals("PTE")) {
+                        JSONObject envObject = service.getJSONObject(envName);
+                        
+                        // Handle multiple namespaces in PTE
+                        Iterator<String> namespaceKeys = envObject.keys();
+                        while (namespaceKeys.hasNext()) {
+                            String namespace = namespaceKeys.next();
+                            JSONObject namespaceObj = envObject.getJSONObject(namespace);
+                            
+                            if (namespaceObj.has("parameters")) {
+                                JSONObject parameters = namespaceObj.getJSONObject("parameters");
+                                Map<String, String> paramMap = new HashMap<>();
+                                
+                                Iterator<String> paramKeys = parameters.keys();
+                                while (paramKeys.hasNext()) {
+                                    String originalParamName = paramKeys.next();
+                                    String normalizedName = normalizeParamName(originalParamName);
+                                    String value = parameters.getString(originalParamName);
+                                    
+                                    // If there's already a value for this normalized parameter,
+                                    // keep the first one we encountered
+                                    if (!paramMap.containsKey(normalizedName)) {
+                                        paramMap.put(normalizedName, value);
+                                        normalizedParamNames.add(normalizedName);
+                                    }
+                                }
+                                
+                                serviceEntries.add(new ServiceEntry(serviceName, namespace, paramMap));
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // Write to CSV
+            FileWriter csvWriter = new FileWriter(outputPath);
+            
+            // Write header
+            csvWriter.append("Service,Namespace");
+            for (String paramName : normalizedParamNames) {
+                csvWriter.append(",").append(paramName);
+            }
+            csvWriter.append("\n");
+            
+            // Write data
+            for (ServiceEntry entry : serviceEntries) {
+                String serviceName = escapeCSV(entry.serviceName);
+                String namespace = escapeCSV(entry.namespace);
+                
+                csvWriter.append(serviceName).append(",").append(namespace);
+                
+                for (String paramName : normalizedParamNames) {
+                    csvWriter.append(",");
+                    String value = entry.parameters.getOrDefault(paramName, "");
+                    csvWriter.append(escapeCSV(value));
+                }
+                csvWriter.append("\n");
+            }
+            
+            // Close resources
+            csvWriter.flush();
+            csvWriter.close();
+            reader.close();
+            
+            System.out.println("CSV file has been created successfully at: " + outputPath);
+            System.out.println("Total entries processed: " + serviceEntries.size());
+            System.out.println("Total normalized parameters found: " + normalizedParamNames.size());
+            
+        } catch (Exception e) {
+            System.out.println("Error processing JSON or writing CSV: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+    
+    private static String escapeCSV(String value) {
+        if (value == null) return "";
+        if (value.contains(",") || value.contains("\"") || value.contains("\n")) {
+            return "\"" + value.replace("\"", "\"\"") + "\"";
+        }
+        return value;
+    }
+    
+    private static class ServiceEntry {
+        String serviceName;
+        String namespace;
+        Map<String, String> parameters;
+        
+        ServiceEntry(String serviceName, String namespace, Map<String, String> parameters) {
+            this.serviceName = serviceName;
+            this.namespace = namespace;
+            this.parameters = parameters;
+        }
+    }
+}
