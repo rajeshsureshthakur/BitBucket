@@ -1,0 +1,126 @@
+import java.io.*;
+import java.net.*;
+import java.util.*;
+import java.nio.file.*;
+import org.json.JSONArray;
+import org.json.JSONObject;
+import com.opencsv.CSVReader;
+import com.opencsv.CSVWriter;
+
+public class ServiceStatusMatcher {
+    public static void main(String[] args) {
+        String csvInputPath = "pte_parameters.csv";
+        String csvOutputPath = "service_status_matched.csv";
+        String urlString = "your-url-here";
+        String authToken = "your-auth-token-here";
+
+        try {
+            // Read service status from URL
+            Map<String, ServiceStatus> serviceStatuses = fetchServiceStatus(urlString, authToken);
+            
+            // Read and process CSV
+            List<String[]> matchedEntries = processCSV(csvInputPath, serviceStatuses);
+            
+            // Write matched entries to new CSV
+            writeMatchedEntries(csvOutputPath, matchedEntries);
+            
+        } catch (Exception e) {
+            System.out.println("Error: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+
+    private static Map<String, ServiceStatus> fetchServiceStatus(String urlString, String authToken) throws Exception {
+        URL url = new URL(urlString);
+        HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+        conn.setRequestMethod("GET");
+        conn.setRequestProperty("Authorization", "Basic " + authToken);
+
+        Map<String, ServiceStatus> serviceStatuses = new HashMap<>();
+        
+        if (conn.getResponseCode() == HttpURLConnection.HTTP_OK) {
+            BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream()));
+            StringBuilder response = new StringBuilder();
+            String line;
+            
+            while ((line = reader.readLine()) != null) {
+                response.append(line);
+            }
+            reader.close();
+
+            JSONArray jsonArray = new JSONArray(response.toString());
+            for (int i = 0; i < jsonArray.length(); i++) {
+                JSONObject service = jsonArray.getJSONObject(i);
+                ServiceStatus status = new ServiceStatus(
+                    service.getString("serviceName"),
+                    service.getString("projectName"),
+                    service.getInt("ready"),
+                    service.getInt("running")
+                );
+                serviceStatuses.put(service.getString("serviceName"), status);
+            }
+        }
+        
+        conn.disconnect();
+        return serviceStatuses;
+    }
+
+    private static List<String[]> processCSV(String csvPath, Map<String, ServiceStatus> serviceStatuses) throws Exception {
+        List<String[]> matchedEntries = new ArrayList<>();
+        
+        // Read CSV file
+        CSVReader reader = new CSVReader(new FileReader(csvPath));
+        String[] headers = reader.readNext(); // Read headers
+        matchedEntries.add(Arrays.copyOf(headers, headers.length + 2)); // Add Ready and Running columns
+        
+        String[] line;
+        while ((line = reader.readNext()) != null) {
+            String serviceName = line[0];
+            String namespace = line[1];
+            
+            // Check if namespace contains "namicg" and service exists in status
+            if (namespace.contains("namicg") && serviceStatuses.containsKey(serviceName)) {
+                ServiceStatus status = serviceStatuses.get(serviceName);
+                
+                // Create new array with additional columns
+                String[] newLine = Arrays.copyOf(line, line.length + 2);
+                newLine[line.length] = String.valueOf(status.ready);
+                newLine[line.length + 1] = String.valueOf(status.running);
+                
+                matchedEntries.add(newLine);
+            }
+        }
+        
+        reader.close();
+        return matchedEntries;
+    }
+
+    private static void writeMatchedEntries(String outputPath, List<String[]> entries) throws Exception {
+        CSVWriter writer = new CSVWriter(new FileWriter(outputPath));
+        
+        // Update headers
+        String[] headers = entries.get(0);
+        headers[headers.length - 2] = "Ready";
+        headers[headers.length - 1] = "Running";
+        
+        // Write all entries
+        writer.writeAll(entries);
+        writer.close();
+        
+        System.out.println("Matched entries written to: " + outputPath);
+    }
+
+    private static class ServiceStatus {
+        String serviceName;
+        String projectName;
+        int ready;
+        int running;
+
+        ServiceStatus(String serviceName, String projectName, int ready, int running) {
+            this.serviceName = serviceName;
+            this.projectName = projectName;
+            this.ready = ready;
+            this.running = running;
+        }
+    }
+}
